@@ -7,23 +7,23 @@
   <meta name="description" content="CFO-level live token treasury dashboard for Fogo Foundation" />
   <style>
     :root {
-      --bg: #110804;
-      --bg2: #1c0f08;
-      --panel: rgba(36, 19, 10, 0.72);
-      --line: #6e3a1f;
-      --ink: #fff1e9;
-      --muted: #e3bda8;
-      --fire1: #ff6a00;
-      --fire2: #ff8a00;
-      --fire3: #ff3d00;
-      --amber: #ffbe67;
-      --green: #4bf0a8;
+      --bg: #140503;
+      --bg2: #220904;
+      --panel: rgba(45, 14, 8, 0.76);
+      --line: #7a2a16;
+      --ink: #fff0ea;
+      --muted: #e7b4a3;
+      --fire1: #ff3b0a;
+      --fire2: #e12600;
+      --fire3: #9b1400;
+      --amber: #ff8a4d;
+      --green: #38e89c;
     }
     * { box-sizing: border-box; }
     html, body { margin:0; padding:0; color:var(--ink); font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     body {
-      background: radial-gradient(1000px 600px at 12% -20%, rgba(255,106,0,.2), transparent 70%),
-                  radial-gradient(900px 600px at 88% -10%, rgba(255,61,0,.24), transparent 70%),
+      background: radial-gradient(1000px 600px at 12% -20%, rgba(225,38,0,.28), transparent 70%),
+                  radial-gradient(900px 600px at 88% -10%, rgba(155,20,0,.34), transparent 70%),
                   linear-gradient(180deg, var(--bg), var(--bg2));
       min-height: 100vh;
       overflow-x: hidden;
@@ -34,6 +34,20 @@
     @keyframes scan { from { transform: translateY(-15%);} to { transform: translateY(15%);} }
 
     .wrap { max-width: 1440px; margin: 0 auto; padding: 24px; position: relative; }
+    .wrap:before {
+      content:"";
+      position:absolute;
+      right: 4%;
+      top: 0;
+      width: 360px;
+      height: 360px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,59,10,.26), rgba(155,20,0,0) 68%);
+      filter: blur(10px);
+      animation: lavaOrb 7s ease-in-out infinite;
+      pointer-events:none;
+    }
+    @keyframes lavaOrb { 0%,100% { transform: translateY(0px);} 50% { transform: translateY(14px);} }
     .hero {
       border:1px solid var(--line); border-radius: 22px; background: linear-gradient(150deg, rgba(50,24,12,.94), rgba(23,12,7,.8));
       padding: 24px; box-shadow: 0 24px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
@@ -42,8 +56,8 @@
     .brandline { display:flex; align-items:center; gap:12px; margin-bottom: 8px; }
     .fogo-logo { width: 34px; height: 34px; border-radius: 10px; border:1px solid #7e4528; background:#2d140a; padding:4px; box-shadow: 0 0 18px rgba(255,106,0,.25); object-fit: contain; }
     .badge { display:inline-flex; gap:8px; align-items:center; border:1px solid #8e4a2a; border-radius:999px; padding:6px 10px; color:#ffd5c2; font-size:12px; }
-    .dot { width:8px; height:8px; border-radius:50%; background:var(--fire2); box-shadow:0 0 0 rgba(255,138,0,.5); animation:pulse 1.4s infinite; }
-    @keyframes pulse { 70% { box-shadow:0 0 0 12px rgba(255,138,0,0);} 100% { box-shadow:0 0 0 0 rgba(255,138,0,0);} }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 0 rgba(56,232,156,.5); animation:pulse 1.4s infinite; }
+    @keyframes pulse { 70% { box-shadow:0 0 0 12px rgba(56,232,156,0);} 100% { box-shadow:0 0 0 0 rgba(56,232,156,0);} }
     h1 { margin:10px 0 8px; font-size:44px; line-height:1; letter-spacing:-.02em; }
     .sub { color:var(--muted); margin:0; }
     .sync { text-align:right; color: var(--muted); font-size:13px; }
@@ -54,11 +68,13 @@
     .kpi:before { content:""; position:absolute; inset:0; background:linear-gradient(120deg, transparent 20%, rgba(255,184,128,.12) 45%, transparent 60%); transform:translateX(-120%); animation:sweep 4.5s linear infinite; }
     @keyframes sweep { to { transform: translateX(120%);} }
     .k-label { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#ffc8a8; }
-    .k-value { font-weight:800; font-size: clamp(18px, 1.45vw, 26px); line-height:1.1; margin-top:6px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+    .k-value { font-weight:800; font-size: clamp(18px, 1.45vw, 26px); line-height:1.1; margin-top:6px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; text-shadow: 0 0 12px rgba(255,106,0,.22); animation: valuePulse 2.8s ease-in-out infinite; }
+    @keyframes valuePulse { 0%,100% { opacity: .95; } 50% { opacity: 1; } }
     .k-sub { font-size:12px; color:#ffc4a0; margin-top:4px; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
 
     .main { margin-top:14px; display:grid; grid-template-columns: 1.1fr .9fr; gap: 12px; align-items: stretch; }
-    .card { border:1px solid var(--line); border-radius:16px; background:var(--panel); padding:14px; box-shadow: 0 12px 35px rgba(0,0,0,.4); min-height: 270px; }
+    .card { border:1px solid var(--line); border-radius:16px; background:var(--panel); padding:14px; box-shadow: 0 12px 35px rgba(0,0,0,.4); min-height: 270px; transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease; }
+    .card:hover { transform: translateY(-2px); border-color:#a83a20; box-shadow: 0 16px 40px rgba(0,0,0,.46), 0 0 0 1px rgba(255,106,0,.16) inset; }
     .card h3 { margin:0 0 10px; font-size:16px; letter-spacing:.02em; color:#ffe7d8; }
 
     table { width:100%; border-collapse: collapse; font-size:13px; }
