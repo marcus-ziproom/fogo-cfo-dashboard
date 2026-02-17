@@ -173,7 +173,7 @@
         <span class="tape-item"><span class="tape-pill">Price</span><span data-k="price">FOGO —</span></span>
         <span class="tape-item"><span class="tape-pill">Trend</span><span data-k="trend">—</span></span>
         <span class="tape-item"><span class="tape-pill">TPS</span><span data-k="tps">—</span></span>
-        <span class="tape-item"><span class="tape-pill">Txns24h</span><span data-k="tx24">—</span></span>
+        <span class="tape-item"><span class="tape-pill">Txns Window</span><span data-k="txWindow">—</span></span>
         <span class="tape-item"><span class="tape-pill">MCap</span><span data-k="mcap">—</span></span>
         <span class="tape-item"><span class="tape-pill">TVL</span><span data-k="tvl">—</span></span>
         <span class="tape-item"><span class="tape-pill">Stake Ratio</span><span data-k="stakeRatio">—</span></span>
@@ -190,7 +190,7 @@
       <div class="kpi"><div class="k-label">TVL</div><div class="k-value" id="tvl">—</div><div class="k-sub">DeFiLlama</div></div>
 
       <div class="kpi"><div class="k-label">Live TPS</div><div class="k-value" id="tps">—</div><div class="k-sub">Transactions / second</div></div>
-      <div class="kpi"><div class="k-label">Txns (24h)</div><div class="k-value" id="tx24">—</div><div class="k-sub">Estimated from live samples</div></div>
+      <div class="kpi"><div class="k-label">Txns (Sample Window)</div><div class="k-value" id="tx24">—</div><div class="k-sub" id="txWindowMeta">Exact sum from live performance samples</div></div>
       <div class="kpi"><div class="k-label">Cumulative Txns</div><div class="k-value" id="txTotal">—</div><div class="k-sub">From epoch info</div></div>
       <div class="kpi"><div class="k-label">Current Epoch</div><div class="k-value" id="epoch">—</div><div class="k-sub" id="epochProgress">—</div></div>
       <div class="kpi"><div class="k-label">Total Stake</div><div class="k-value" id="stake">—</div><div class="k-sub" id="stakingRatio">—</div></div>
@@ -203,7 +203,7 @@
         <canvas id="spark" class="sparkline" width="900" height="210"></canvas>
         <div class="throughput-meta"><span id="sparkMin">Min: —</span><span id="sparkNow">Now: — TPS</span><span id="sparkMax">Max: —</span></div>
         <div class="realtime-strip"><div></div></div>
-        <div class="muted" style="margin-top:8px">Graph updates every 1 second using live performance sampling + rolling interpolation.</div>
+        <div class="muted" style="margin-top:8px">Graph updates every 1 second using live performance samples from Fogo mainnet RPC.</div>
       </div>
       <div class="card">
         <h3>Supply Composition</h3>
@@ -246,7 +246,9 @@
       txTotal: null,
       lastTickTs: Date.now(),
       market: { price: null, pricePrev: null, mcap: null, fdv: null, vol: null, chg24: null },
-      network: { tvl: null, epoch: null, epochProgress: null, stakeRatio: null }
+      network: { tvl: null, epoch: null, epochProgress: null, stakeRatio: null },
+      txWindowCount: null,
+      txWindowSecs: null
     };
     const el = (id) => document.getElementById(id);
     const fmtUsd = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', notation: n > 1e9 ? 'compact' : 'standard', maximumFractionDigits: 2 }).format(n);
@@ -316,56 +318,48 @@
         state.market.fdv = market?.fully_diluted_valuation ?? state.market.fdv;
         state.market.vol = market?.total_volume ?? state.market.vol;
 
-        el('price').textContent = fmtUsdPrice(state.market.price);
-        const pArrow = state.market.pricePrev != null && state.market.price != null ? (state.market.price >= state.market.pricePrev ? '▲' : '▼') : '•';
-        el('chg').innerHTML = state.market.chg24 != null ? `<span class="${state.market.chg24 >= 0 ? 'trend-up' : 'trend-down'}">${pArrow} ${state.market.chg24.toFixed(2)}% (24h)</span>` : '—';
-        el('mcap').textContent = fmtUsd(state.market.mcap); el('fdv').textContent = fmtUsd(state.market.fdv); el('vol').textContent = fmtUsd(state.market.vol);
-        el('circ').textContent = fmtCompact(circ); el('supplyRatio').textContent = (circ && totalSupply) ? `${((circ/totalSupply)*100).toFixed(2)}% of total supply` : '—'; el('tvl').textContent = fmtUsd(tvl);
+        el('chg').innerHTML = state.market.chg24 != null ? `<span class="${state.market.chg24 >= 0 ? 'trend-up' : 'trend-down'}">${state.market.chg24 >= 0 ? '▲' : '▼'} ${state.market.chg24.toFixed(2)}% (24h)</span>` : '—';
+        el('circ').textContent = fmtCompact(circ);
+        el('supplyRatio').textContent = (circ && totalSupply) ? `${((circ/totalSupply)*100).toFixed(2)}% of total supply` : '—';
 
         if (epoch?.transactionCount) state.txTotal = Number(epoch.transactionCount);
         const epochProgress = epoch?.slotsInEpoch ? ((epoch.slotIndex/epoch.slotsInEpoch)*100) : null;
-        state.network.tvl = tvl; state.network.epoch = epoch?.epoch ?? null; state.network.epochProgress = epochProgress; state.network.stakeRatio = totalSupply ? ((totalStake/totalSupply)*100) : null;
+        state.network.tvl = tvl;
+        state.network.epoch = epoch?.epoch ?? null;
+        state.network.epochProgress = epochProgress;
+        state.network.stakeRatio = totalSupply ? ((totalStake/totalSupply)*100) : null;
 
-        el('txTotal').textContent = fmtCompact(state.txTotal); el('epoch').textContent = epoch?.epoch ?? '—'; el('epochProgress').textContent = epochProgress != null ? `${epochProgress.toFixed(2)}% through epoch` : '—';
-        el('stake').textContent = fmtCompact(totalStake); el('stakingRatio').textContent = totalSupply ? `${((totalStake/totalSupply)*100).toFixed(2)}% staking ratio` : '—'; el('validators').textContent = activeVotes.length || '—';
+        el('epoch').textContent = epoch?.epoch ?? '—';
+        el('epochProgress').textContent = epochProgress != null ? `${epochProgress.toFixed(2)}% through epoch` : '—';
+        el('stake').textContent = fmtCompact(totalStake);
+        el('stakingRatio').textContent = totalSupply ? `${((totalStake/totalSupply)*100).toFixed(2)}% staking ratio` : '—';
+        el('validators').textContent = activeVotes.length || '—';
         setBars(circ, totalSupply, totalStake);
         const top = [...activeVotes].sort((a,b)=>Number(b.activatedStake||0)-Number(a.activatedStake||0)).slice(0,10);
         el('validatorRows').innerHTML = top.map(v=>{ const stake = Number(v.activatedStake||0)/1e9; const share = totalStake ? (stake/totalStake)*100 : 0; const name=(v.nodePubkey||'').slice(0,6)+'…'+(v.nodePubkey||'').slice(-6); return `<tr><td>${name}</td><td>${fmtCompact(stake)}</td><td>${share.toFixed(2)}%</td></tr>`; }).join('') || '<tr><td colspan="3">No validator data</td></tr>';
         await refreshWallets(market?.current_price || null);
+        renderFromState();
         const now = Date.now(); state.lastSyncMs = now; el('lastSync').textContent = new Date(now).toLocaleTimeString(); updateSync();
       } catch { el('syncAge').textContent = 'Data fetch error. Retrying automatically…'; }
     }
 
-    function updateTickerAndTrends(now) {
-      const dt = Math.max(1, (now - state.lastTickTs)/1000);
-      state.lastTickTs = now;
-
-      let tpsDisplay = null;
-      if (state.liveTps) {
-        tpsDisplay = state.liveTps * (1 + (Math.sin(now / 350) * 0.005));
-        el('tps').textContent = fmtNum(tpsDisplay);
-        el('tx24').textContent = fmtCompact(tpsDisplay * 86400);
-        if (state.txTotal) { state.txTotal += tpsDisplay * dt; el('txTotal').textContent = fmtCompact(state.txTotal); }
-      }
-
-      if (state.market.price != null) {
-        const drift = (state.market.chg24 || 0) / 100 / 86400;
-        const micro = Math.sin(now / 700) * 0.0006;
-        const prev = state.market.price;
-        state.market.price = prev * (1 + drift + micro);
-        const up = state.market.price >= prev;
-        el('price').innerHTML = `${fmtUsdPrice(state.market.price)} <span class="${up ? 'trend-up' : 'trend-down'}">${up ? '▲' : '▼'}</span>`;
-        const ratio = prev > 0 && state.market.mcap ? (state.market.price / prev) : 1;
-        if (state.market.mcap) el('mcap').textContent = fmtUsd(state.market.mcap * ratio);
-        if (state.market.fdv) el('fdv').textContent = fmtUsd(state.market.fdv * ratio);
-        if (state.market.vol) el('vol').textContent = fmtUsd(state.market.vol * (1 + Math.sin(now / 1200) * 0.002));
-      }
-
+    function renderFromState() {
       const trend24 = state.market.chg24 != null ? `${state.market.chg24 >= 0 ? '▲' : '▼'} ${Math.abs(state.market.chg24).toFixed(2)}%` : '—';
+      const up = (state.market.chg24 || 0) >= 0;
+
+      el('price').innerHTML = `${fmtUsdPrice(state.market.price)} <span class="${up ? 'trend-up' : 'trend-down'}">${up ? '▲' : '▼'}</span>`;
+      el('mcap').textContent = fmtUsd(state.market.mcap);
+      el('fdv').textContent = fmtUsd(state.market.fdv);
+      el('vol').textContent = fmtUsd(state.market.vol);
+      el('tps').textContent = state.liveTps != null ? fmtNum(state.liveTps) : '—';
+      el('tx24').textContent = state.txWindowCount != null ? fmtCompact(state.txWindowCount) : '—';
+      el('txWindowMeta').textContent = state.txWindowSecs ? `Exact sum over last ${(state.txWindowSecs/60).toFixed(0)} min sample window` : 'Exact sum from live performance samples';
+      el('txTotal').textContent = fmtCompact(state.txTotal);
+
       setTapeValue('price', `FOGO ${fmtUsdPrice(state.market.price)}`);
-      setTapeValue('trend', `<span class="${(state.market.chg24 || 0) >= 0 ? 'trend-up' : 'trend-down'}">${trend24}</span>`);
-      setTapeValue('tps', tpsDisplay != null ? `${tpsDisplay.toFixed(2)} TPS` : '—');
-      setTapeValue('tx24', tpsDisplay != null ? `${fmtCompact(tpsDisplay * 86400)}` : '—');
+      setTapeValue('trend', `<span class="${up ? 'trend-up' : 'trend-down'}">${trend24}</span>`);
+      setTapeValue('tps', state.liveTps != null ? `${state.liveTps.toFixed(2)} TPS` : '—');
+      setTapeValue('txWindow', state.txWindowCount != null ? `${fmtCompact(state.txWindowCount)} / ${state.txWindowSecs ? (state.txWindowSecs/60).toFixed(0) : '—'}m` : '—');
       setTapeValue('mcap', fmtUsd(state.market.mcap));
       setTapeValue('tvl', fmtUsd(state.network.tvl));
       setTapeValue('stakeRatio', state.network.stakeRatio != null ? `${state.network.stakeRatio.toFixed(2)}%` : '—');
@@ -374,14 +368,29 @@
 
     async function refreshLiveLane() {
       try {
-        const perf = await rpc('getRecentPerformanceSamples', [10]);
+        const [perf, epoch] = await Promise.all([
+          rpc('getRecentPerformanceSamples', [10]),
+          rpc('getEpochInfo', [])
+        ]);
+
         const samples = Array.isArray(perf) ? perf : [];
         const totalTx = samples.reduce((a,s)=>a + Number(s?.numTransactions || 0),0);
         const totalSecs = samples.reduce((a,s)=>a + Number(s?.samplePeriodSecs || 0),0);
         const tps = totalTx && totalSecs ? totalTx / totalSecs : null;
-        if (tps && isFinite(tps)) { state.liveTps = tps; state.tpsSeries.push(tps); if (state.tpsSeries.length > 160) state.tpsSeries.shift(); }
+
+        state.txWindowCount = totalTx || null;
+        state.txWindowSecs = totalSecs || null;
+
+        if (tps && isFinite(tps)) {
+          state.liveTps = tps;
+          state.tpsSeries.push(tps);
+          if (state.tpsSeries.length > 160) state.tpsSeries.shift();
+        }
+
+        if (epoch?.transactionCount) state.txTotal = Number(epoch.transactionCount);
       } catch {}
-      updateTickerAndTrends(Date.now());
+
+      renderFromState();
       updateSync();
       drawSpark();
     }
