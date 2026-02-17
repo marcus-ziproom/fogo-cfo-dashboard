@@ -63,6 +63,40 @@
     .sync { text-align:right; color: var(--muted); font-size:13px; }
     .sync b { color: #ffd8b3; }
 
+    .tape {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(50,18,9,.72);
+      overflow: hidden;
+      position: relative;
+    }
+    .tape-track {
+      display: inline-block;
+      white-space: nowrap;
+      padding: 9px 0;
+      animation: tapeScroll 22s linear infinite;
+      will-change: transform;
+    }
+    .tape-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 18px;
+      color: #ffd9c6;
+      font-size: 12px;
+      letter-spacing: .03em;
+    }
+    .tape-pill {
+      border: 1px solid #9b331d;
+      border-radius: 999px;
+      padding: 2px 8px;
+      color: #ffba94;
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+    @keyframes tapeScroll { from { transform: translateX(0);} to { transform: translateX(-50%);} }
+
     .kpi-grid { margin-top:16px; display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px; }
     .kpi { border:1px solid var(--line); border-radius:14px; padding:11px; background:var(--panel); position:relative; overflow:hidden; min-height: 94px; }
     .kpi:before { content:""; position:absolute; inset:0; background:linear-gradient(120deg, transparent 20%, rgba(255,184,128,.12) 45%, transparent 60%); transform:translateX(-120%); animation:sweep 4.5s linear infinite; }
@@ -119,6 +153,10 @@
         <div id="syncAge">Live feed warming up…</div>
         <div style="margin-top:8px" class="muted">Data sources: Fogo Mainnet RPC, CoinGecko, DeFiLlama</div>
       </div>
+    </section>
+
+    <section class="tape">
+      <div class="tape-track" id="tapeTrack"></div>
     </section>
 
     <section class="kpi-grid">
@@ -178,11 +216,21 @@
   </div>
 
   <script>
-    const state = { lastSyncMs: null, tpsSeries: [], wallets: JSON.parse(localStorage.getItem('fogo_wallets') || '[]'), liveTps: null, txTotal: null, lastTickTs: Date.now() };
+    const state = { lastSyncMs: null, tpsSeries: [], wallets: JSON.parse(localStorage.getItem('fogo_wallets') || '[]'), liveTps: null, txTotal: null, lastTickTs: Date.now(), activity: [] };
     const el = (id) => document.getElementById(id);
     const fmtUsd = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', notation: n > 1e9 ? 'compact' : 'standard', maximumFractionDigits: 2 }).format(n);
     const fmtNum = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
     const fmtCompact = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { notation:'compact', maximumFractionDigits: 2 }).format(n);
+
+    function pushActivity(tag, text) {
+      const t = new Date().toLocaleTimeString();
+      state.activity.unshift({ tag, text, t });
+      state.activity = state.activity.slice(0, 14);
+      const list = state.activity.length ? state.activity : [{ tag: 'LIVE', text: 'Initializing telemetry stream', t }];
+      const html = list.map(i => `<span class="tape-item"><span class="tape-pill">${i.tag}</span>${i.text}<small style="opacity:.72">${i.t}</small></span>`).join('');
+      const track = el('tapeTrack');
+      track.innerHTML = html + html;
+    }
 
     async function rpc(method, params=[]) {
       const r = await fetch('https://mainnet.fogo.io', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({jsonrpc:'2.0', id:1, method, params}) });
@@ -230,11 +278,13 @@
         const circ = market?.circulating_supply ?? null; const totalSupply = market?.total_supply ?? supply?.value?.total / 1e9 ?? null; const activeVotes = vote?.current || [];
         const totalStakeLamports = activeVotes.reduce((a,v)=> a + Number(v.activatedStake || 0), 0); const totalStake = totalStakeLamports / 1e9;
         el('price').textContent = fmtUsd(market?.current_price); el('chg').textContent = market?.price_change_percentage_24h != null ? `${market.price_change_percentage_24h.toFixed(2)}% (24h)` : '—';
+        if (market?.current_price) pushActivity('MARKET', `FOGO ${fmtUsd(market.current_price)} • 24h ${market?.price_change_percentage_24h?.toFixed?.(2) ?? '0.00'}%`);
         el('mcap').textContent = fmtUsd(market?.market_cap); el('fdv').textContent = fmtUsd(market?.fully_diluted_valuation); el('vol').textContent = fmtUsd(market?.total_volume);
         el('circ').textContent = fmtCompact(circ); el('supplyRatio').textContent = (circ && totalSupply) ? `${((circ/totalSupply)*100).toFixed(2)}% of total supply` : '—'; el('tvl').textContent = fmtUsd(tvl);
         if (epoch?.transactionCount) state.txTotal = Number(epoch.transactionCount);
         el('txTotal').textContent = fmtCompact(state.txTotal); el('epoch').textContent = epoch?.epoch ?? '—'; el('epochProgress').textContent = epoch?.slotsInEpoch ? `${((epoch.slotIndex/epoch.slotsInEpoch)*100).toFixed(2)}% through epoch` : '—';
         el('stake').textContent = fmtCompact(totalStake); el('stakingRatio').textContent = totalSupply ? `${((totalStake/totalSupply)*100).toFixed(2)}% staking ratio` : '—'; el('validators').textContent = activeVotes.length || '—';
+        pushActivity('NETWORK', `Validators ${activeVotes.length || 0} • Stake ${fmtCompact(totalStake)} FOGO`);
         setBars(circ, totalSupply, totalStake);
         const top = [...activeVotes].sort((a,b)=>Number(b.activatedStake||0)-Number(a.activatedStake||0)).slice(0,10);
         el('validatorRows').innerHTML = top.map(v=>{ const stake = Number(v.activatedStake||0)/1e9; const share = totalStake ? (stake/totalStake)*100 : 0; const name=(v.nodePubkey||'').slice(0,6)+'…'+(v.nodePubkey||'').slice(-6); return `<tr><td>${name}</td><td>${fmtCompact(stake)}</td><td>${share.toFixed(2)}%</td></tr>`; }).join('') || '<tr><td colspan="3">No validator data</td></tr>';
@@ -256,12 +306,14 @@
         el('tps').textContent = fmtNum(tpsJitter);
         el('tx24').textContent = fmtCompact(tpsJitter * 86400);
         if (state.txTotal) { state.txTotal += tpsJitter * dt; el('txTotal').textContent = fmtCompact(state.txTotal); }
+        if (now % 5000 < 1000) pushActivity('THROUGHPUT', `Live TPS ${tpsJitter.toFixed(2)} • Txns24 ${fmtCompact(tpsJitter * 86400)}`);
       }
       updateSync(); drawSpark();
     }
 
     el('addWallet').addEventListener('click', () => { const w = el('walletInput').value.trim(); if (!w) return; if (!state.wallets.includes(w)) state.wallets.push(w); localStorage.setItem('fogo_wallets', JSON.stringify(state.wallets)); el('walletInput').value = ''; refreshFull(); });
 
+    pushActivity('LIVE', 'Fogo treasury telemetry stream online');
     refreshFull();
     refreshLiveLane();
     setInterval(refreshLiveLane, 1000);
