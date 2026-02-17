@@ -186,7 +186,6 @@
       <div class="kpi"><div class="k-label">Market Cap</div><div class="k-value" id="mcap">—</div><div class="k-sub">USD</div></div>
       <div class="kpi"><div class="k-label">FDV</div><div class="k-value" id="fdv">—</div><div class="k-sub">USD</div></div>
       <div class="kpi"><div class="k-label">24h Volume</div><div class="k-value" id="vol">—</div><div class="k-sub">USD</div></div>
-      <div class="kpi"><div class="k-label">Onchain Revenue (Sample)</div><div class="k-value" id="revenue">—</div><div class="k-sub" id="revenueMeta">Fee-based proxy from live tx sample</div></div>
       <div class="kpi"><div class="k-label">Circulating Supply</div><div class="k-value" id="circ">—</div><div class="k-sub" id="supplyRatio">—</div></div>
       <div class="kpi"><div class="k-label">TVL</div><div class="k-value" id="tvl">—</div><div class="k-sub">DeFiLlama</div></div>
 
@@ -225,7 +224,7 @@
       <div class="card">
         <h3>Validator Concentration Snapshot</h3>
         <table>
-          <thead><tr><th>Validator</th><th>Activated Stake</th><th>Share</th></tr></thead>
+          <thead><tr><th>Validator Operator</th><th>Activated Stake</th><th>Share</th></tr></thead>
           <tbody id="validatorRows"><tr><td colspan="3">Loading…</td></tr></tbody>
         </table>
       </div>
@@ -241,6 +240,24 @@
         </table>
       </div>
     </section>
+
+    <section class="main">
+      <div class="card">
+        <h3>Onchain Revenue & Inflation (Live)</h3>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+          <div style="border:1px solid #7f4428;border-radius:12px;padding:10px;background:rgba(33,16,10,.56)"><div style="font-size:11px;color:#ffc4a0;text-transform:uppercase">Revenue (Exact Fee Sum)</div><div id="revValue" style="font-size:26px;font-weight:800;margin-top:4px">—</div><div id="revMeta" style="font-size:12px;color:#ffc4a0">—</div></div>
+          <div style="border:1px solid #7f4428;border-radius:12px;padding:10px;background:rgba(33,16,10,.56)"><div style="font-size:11px;color:#ffc4a0;text-transform:uppercase">Inflation (Annualized)</div><div id="inflValue" style="font-size:26px;font-weight:800;margin-top:4px">—</div><div id="inflMeta" style="font-size:12px;color:#ffc4a0">—</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Monetary Change Tracker</h3>
+        <div style="border:1px solid #7f4428;border-radius:12px;padding:12px;background:rgba(33,16,10,.56)">
+          <div style="font-size:11px;color:#ffc4a0;text-transform:uppercase">Inflation Since Dashboard Open</div>
+          <div id="inflSinceOpen" style="font-size:30px;font-weight:900;margin-top:4px">—</div>
+          <div id="inflUsdSinceOpen" style="font-size:13px;color:#ffc4a0">—</div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script>
@@ -251,10 +268,22 @@
       liveTps: null,
       txTotal: null,
       lastTickTs: Date.now(),
-      market: { price: null, pricePrev: null, mcap: null, fdv: null, vol: null, chg24: null },
+      market: { price: null, pricePrev: null, mcap: null, fdv: null, vol: null, chg24: null, totalSupply: null },
       network: { tvl: null, epoch: null, epochProgress: null, stakeRatio: null },
       txWindowCount: null,
-      txWindowSecs: null
+      txWindowSecs: null,
+      revenueFogo: null,
+      revenueUsd: null,
+      revenueSlots: null,
+      inflationRate: null,
+      inflationFogoYear: null,
+      inflationUsdYear: null,
+      inflationSinceOpenFogo: 0,
+      supplyBaseline: null,
+      validatorNameMap: {},
+      observedFees: [],
+      totalSupplyCurrent: null,
+      openTs: Date.now()
     };
     const el = (id) => document.getElementById(id);
     const fmtUsd = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', notation: n > 1e9 ? 'compact' : 'standard', maximumFractionDigits: 2 }).format(n);
@@ -278,6 +307,46 @@
     }
     async function fetchMarket() { const r = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=fogo&price_change_percentage=24h', { cache:'no-store' }); const j = await r.json(); return Array.isArray(j) ? j[0] : null; }
     async function fetchTvl() { const r = await fetch('https://api.llama.fi/v2/chains', { cache:'no-store' }); const j = await r.json(); const fogo = (Array.isArray(j) ? j.find(x => x.name === 'Fogo') : null) || null; return fogo?.tvl ?? null; }
+
+    async function fetchValidatorNameMap() {
+      try {
+        const rows = await rpc('getProgramAccounts', ['Config1111111111111111111111111111111111111', { encoding: 'jsonParsed' }]);
+        const map = {};
+        (rows || []).forEach((r) => {
+          const info = r?.account?.data?.parsed?.info;
+          if (r?.account?.data?.parsed?.type !== 'validatorInfo') return;
+          const key = (info?.keys || []).find((k) => k?.signer === true)?.pubkey;
+          const name = info?.configData?.name;
+          if (key && name) map[key] = name;
+        });
+        state.validatorNameMap = map;
+      } catch {}
+    }
+
+    async function fetchRevenueAndInflation() {
+      try {
+        const [slot, infl] = await Promise.all([
+          rpc('getSlot', []),
+          rpc('getInflationRate', [])
+        ]);
+
+        const block = await rpc('getBlock', [slot, { transactionDetails: 'full', rewards: false, maxSupportedTransactionVersion: 0 }]);
+        const feesLamports = (block?.transactions || []).reduce((a, t) => a + Number(t?.meta?.fee || 0), 0);
+        const feesFogo = feesLamports / 1e9;
+        state.revenueFogo = feesFogo;
+        state.revenueUsd = (state.market.price != null) ? feesFogo * state.market.price : null;
+        state.revenueSlots = 1;
+
+        state.observedFees.push({ t: Date.now(), fogo: feesFogo });
+        state.observedFees = state.observedFees.filter((x) => Date.now() - x.t <= 3600_000);
+
+        state.inflationRate = infl?.total ?? null;
+        if (state.inflationRate != null && state.supplyBaseline != null) {
+          state.inflationFogoYear = state.supplyBaseline * state.inflationRate;
+          state.inflationUsdYear = (state.market.price != null) ? state.inflationFogoYear * state.market.price : null;
+        }
+      } catch {}
+    }
 
     function updateSync() { if (!state.lastSyncMs) return; const s = Math.floor((Date.now() - state.lastSyncMs) / 1000); el('syncAge').textContent = `Last pull ${s}s ago • Live lane updates every 1s`; }
 
@@ -305,40 +374,80 @@
       const pBurn = Math.max(0, Math.min(100, ((burned||0)/total)*100));
       const pNon = Math.max(0, 100 - pCirc - pBurn);
       el('barCirc').style.width = pCirc + '%';
+      el('barCirc').style.background = 'linear-gradient(90deg,#ff8a4d,#ffb36d)';
       el('barNonCirc').style.width = pNon + '%';
+      el('barNonCirc').style.background = 'linear-gradient(90deg,#c52812,#8a1408)';
       el('barStaked').style.width = pSt + '%';
+      el('barStaked').style.background = 'linear-gradient(90deg,#ffbe67,#ffd089)';
       el('barBurned').style.width = pBurn + '%';
+      el('barBurned').style.background = 'linear-gradient(90deg,#5a0a00,#2d0300)';
       el('txtCirc').textContent = pCirc.toFixed(2)+'%';
       el('txtNonCirc').textContent = pNon.toFixed(2)+'%';
       el('txtStaked').textContent = pSt.toFixed(2)+'%';
       el('txtBurned').textContent = pBurn.toFixed(2)+'%';
     }
 
-    function drawAllocationPie({circ, nonCirc, burned, treasury=12, community=18, ecosystem=20}) {
+    function drawAllocationPie({circ, nonCirc, burned, staked=0}) {
       const cvs = el('allocPie'); if (!cvs) return;
       const ctx = cvs.getContext('2d');
       const W = cvs.width, H = cvs.height; ctx.clearRect(0,0,W,H);
-      const cx = 110, cy = H/2, r = 78;
+      const cx = 118, cy = H/2 - 4, r = 74, depth = 14;
       const parts = [
         {k:'Circulating',v:Math.max(0,circ||0),c:'#ff8a4d'},
-        {k:'Non-Circ',v:Math.max(0,nonCirc||0),c:'#b51200'},
-        {k:'Burned',v:Math.max(0,burned||0),c:'#6f0900'},
-        {k:'Treasury',v:treasury,c:'#ff4a2d'},
-        {k:'Community',v:community,c:'#ffbe67'},
-        {k:'Ecosystem',v:ecosystem,c:'#ffa26e'}
+        {k:'Non-Circulating',v:Math.max(0,nonCirc||0),c:'#c52812'},
+        {k:'Burned',v:Math.max(0,burned||0),c:'#5a0a00'},
+        {k:'Staked',v:Math.max(0,staked||0),c:'#ffb36d'}
       ];
       const total = parts.reduce((a,b)=>a+b.v,0) || 1;
-      let a0 = -Math.PI/2;
+      const tilt = 0.76;
+      const startRot = -Math.PI/2 + Math.sin(Date.now()/1800)*0.08;
+
+      let a0 = startRot;
+      parts.forEach((p)=>{
+        const da = (p.v/total)*Math.PI*2;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + depth, r, r*tilt, 0, a0, a0+da);
+        ctx.lineTo(cx, cy + depth);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(90,20,12,.65)';
+        ctx.fill();
+        a0 += da;
+      });
+
+      a0 = startRot;
       parts.forEach((p,i)=>{
         const da = (p.v/total)*Math.PI*2;
-        ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,a0,a0+da); ctx.closePath(); ctx.fillStyle=p.c; ctx.fill();
+        const grad = ctx.createLinearGradient(cx-r, cy-r, cx+r, cy+r);
+        grad.addColorStop(0, p.c);
+        grad.addColorStop(1, '#ffd9c0');
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, r, r*tilt, 0, a0, a0+da);
+        ctx.lineTo(cx, cy);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(40,10,6,.35)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
         a0 += da;
+
         const ly = 26 + i*28;
-        ctx.fillStyle = p.c; ctx.fillRect(230, ly, 12, 12);
+        ctx.fillStyle = p.c; ctx.fillRect(234, ly, 12, 12);
         ctx.fillStyle = '#ffd8c3'; ctx.font = '12px Inter';
-        ctx.fillText(`${p.k}: ${((p.v/total)*100).toFixed(1)}%`, 248, ly+11);
+        ctx.fillText(`${p.k}: ${((p.v/total)*100).toFixed(1)}%`, 252, ly+11);
       });
+
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 30, 30*tilt, 0, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(30,10,8,.9)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 33, 33*tilt, 0, 0, Math.PI*2);
+      ctx.strokeStyle = 'rgba(255,148,97,.45)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
+
 
     async function refreshWallets(price) {
       const body = el('walletRows'); if (!state.wallets.length) { body.innerHTML = '<tr><td colspan="3">No wallets added yet.</td></tr>'; return; }
@@ -346,11 +455,52 @@
       body.innerHTML = rows.map(r => `<tr><td style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${r.w}</td><td>${fmtNum(r.bal)}</td><td>${r.bal == null || !price ? '—' : fmtUsd(r.bal * price)}</td></tr>`).join('');
     }
 
+    async function refreshValidatorNames() {
+      try {
+        const accounts = await rpc('getProgramAccounts', ['Config1111111111111111111111111111111111111', { encoding: 'jsonParsed' }]);
+        const map = {};
+        (Array.isArray(accounts) ? accounts : []).forEach((a) => {
+          const info = a?.account?.data?.parsed?.info;
+          const cfg = info?.configData;
+          const keys = info?.keys;
+          const identity = Array.isArray(keys) ? keys.find(k => k?.signer && k?.pubkey !== 'Va1idator1nfo111111111111111111111111111111')?.pubkey : null;
+          if (identity && cfg?.name) map[identity] = cfg.name;
+        });
+        state.validatorNameMap = map;
+      } catch {
+        state.validatorNameMap = state.validatorNameMap || {};
+      }
+    }
+
+    async function refreshRevenueAndInflation() {
+      try {
+        const [slot, inflation] = await Promise.all([rpc('getSlot', []), rpc('getInflationRate', [])]);
+        const slots = Array.from({length: 40}, (_,i) => slot - i).filter(s => s > 0);
+        const feeCalls = await Promise.all(slots.map(async (s) => {
+          try {
+            const b = await rpc('getBlock', [s, { transactionDetails: 'none', rewards: true, maxSupportedTransactionVersion: 0 }]);
+            const feeLamports = (b?.rewards || []).filter(r => r?.rewardType === 'Fee').reduce((a,r)=>a + Number(r?.lamports || 0), 0);
+            return feeLamports;
+          } catch { return 0; }
+        }));
+
+        const totalLamports = feeCalls.reduce((a,b)=>a+b,0);
+        state.revenueFogo = totalLamports / 1e9;
+        state.revenueUsd = state.market.price != null ? state.revenueFogo * state.market.price : null;
+        state.revenueSlots = slots.length;
+
+        state.inflationRate = inflation?.total ?? null;
+      } catch {
+        // keep previous values
+      }
+    }
+
     async function refreshFull() {
       try {
         const [market, tvl, epoch, vote, supply] = await Promise.all([fetchMarket(), fetchTvl(), rpc('getEpochInfo', []), rpc('getVoteAccounts', []), rpc('getSupply', [{commitment:'confirmed'}])]);
         const circ = market?.circulating_supply ?? null;
         const totalSupply = market?.total_supply ?? supply?.value?.total / 1e9 ?? null;
+        if (totalSupply && !state.supplyBaseline) state.supplyBaseline = totalSupply;
         const maxSupply = market?.max_supply ?? null;
         const burned = (maxSupply && totalSupply) ? Math.max(0, maxSupply - totalSupply) : 0;
         const activeVotes = vote?.current || [];
@@ -363,6 +513,7 @@
         state.market.mcap = market?.market_cap ?? state.market.mcap;
         state.market.fdv = market?.fully_diluted_valuation ?? state.market.fdv;
         state.market.vol = market?.total_volume ?? state.market.vol;
+        state.market.totalSupply = totalSupply ?? state.market.totalSupply;
 
         el('chg').innerHTML = state.market.chg24 != null ? `<span class="${state.market.chg24 >= 0 ? 'trend-up' : 'trend-down'}">${state.market.chg24 >= 0 ? '▲' : '▼'} ${state.market.chg24.toFixed(2)}% (24h)</span>` : '—';
         el('circ').textContent = fmtCompact(circ);
@@ -375,6 +526,8 @@
         state.network.epochProgress = epochProgress;
         state.network.stakeRatio = totalSupply ? ((totalStake/totalSupply)*100) : null;
 
+        if (totalSupply && state.supplyBaseline == null) state.supplyBaseline = totalSupply;
+
         el('epoch').textContent = epoch?.epoch ?? '—';
         el('epochProgress').textContent = epochProgress != null ? `${epochProgress.toFixed(2)}% through epoch` : '—';
         el('stake').textContent = fmtCompact(totalStake);
@@ -384,7 +537,12 @@
         setBars(circ, totalSupply, totalStake, burned);
         drawAllocationPie({ circ: circ || 0, nonCirc: nonCircAbs, burned: burned || 0 });
         const top = [...activeVotes].sort((a,b)=>Number(b.activatedStake||0)-Number(a.activatedStake||0)).slice(0,10);
-        el('validatorRows').innerHTML = top.map(v=>{ const stake = Number(v.activatedStake||0)/1e9; const share = totalStake ? (stake/totalStake)*100 : 0; const name=(v.nodePubkey||'').slice(0,6)+'…'+(v.nodePubkey||'').slice(-6); return `<tr><td>${name}</td><td>${fmtCompact(stake)}</td><td>${share.toFixed(2)}%</td></tr>`; }).join('') || '<tr><td colspan="3">No validator data</td></tr>';
+        el('validatorRows').innerHTML = top.map(v=>{
+          const stake = Number(v.activatedStake||0)/1e9;
+          const share = totalStake ? (stake/totalStake)*100 : 0;
+          const op = state.validatorNameMap[v.nodePubkey] || `${(v.nodePubkey||'').slice(0,6)}…${(v.nodePubkey||'').slice(-6)}`;
+          return `<tr><td>${op}</td><td>${fmtCompact(stake)}</td><td>${share.toFixed(2)}%</td></tr>`;
+        }).join('') || '<tr><td colspan="3">No validator data</td></tr>';
         await refreshWallets(market?.current_price || null);
         renderFromState();
         const now = Date.now(); state.lastSyncMs = now; el('lastSync').textContent = new Date(now).toLocaleTimeString(); updateSync();
@@ -404,11 +562,21 @@
       el('txWindowMeta').textContent = state.txWindowSecs ? `Exact sum over last ${(state.txWindowSecs/60).toFixed(0)} min sample window` : 'Exact sum from live performance samples';
       el('txTotal').textContent = fmtCompact(state.txTotal);
 
-      const feePerTxFogo = 0.000005; // 5000 lamports / 1e9
-      const sampleRevenueFogo = state.txWindowCount != null ? state.txWindowCount * feePerTxFogo : null;
-      const sampleRevenueUsd = (sampleRevenueFogo != null && state.market.price != null) ? sampleRevenueFogo * state.market.price : null;
-      el('revenue').textContent = sampleRevenueUsd != null ? fmtUsd(sampleRevenueUsd) : '—';
-      el('revenueMeta').textContent = state.txWindowSecs ? `Proxy from base tx fees over ${(state.txWindowSecs/60).toFixed(0)}m` : 'Fee-based proxy from live tx sample';
+      el('revValue').textContent = state.revenueUsd != null ? fmtUsd(state.revenueUsd) : '—';
+      el('revMeta').textContent = state.revenueSlots ? `Exact fee sum over last ${state.revenueSlots} blocks` : '—';
+
+      const inflPct = state.inflationRate != null ? (state.inflationRate * 100) : null;
+      const annualTokens = (state.inflationRate != null && state.supplyBaseline != null) ? state.supplyBaseline * state.inflationRate : null;
+      const annualUsd = (annualTokens != null && state.market.price != null) ? annualTokens * state.market.price : null;
+      el('inflValue').textContent = inflPct != null ? `${inflPct.toFixed(2)}%` : '—';
+      el('inflMeta').textContent = annualUsd != null ? `≈ ${fmtUsd(annualUsd)} annualized` : 'Annualized from onchain inflation rate';
+
+      const inflSince = (state.supplyBaseline != null && state.market.totalSupply != null)
+        ? Math.max(0, state.market.totalSupply - state.supplyBaseline)
+        : null;
+      const inflSinceUsd = (inflSince != null && state.market.price != null) ? inflSince * state.market.price : null;
+      el('inflSinceOpen').textContent = inflSince != null ? `${fmtCompact(inflSince)} FOGO` : 'Tracking...';
+      el('inflUsdSinceOpen').textContent = inflSinceUsd != null ? `${fmtUsd(inflSinceUsd)} since open` : 'USD equivalent updates live';
 
       setTapeValue('price', `FOGO ${fmtUsdPrice(state.market.price)}`);
       setTapeValue('trend', `<span class="${up ? 'trend-up' : 'trend-down'}">${trend24}</span>`);
@@ -452,10 +620,14 @@
     el('addWallet').addEventListener('click', () => { const w = el('walletInput').value.trim(); if (!w) return; if (!state.wallets.includes(w)) state.wallets.push(w); localStorage.setItem('fogo_wallets', JSON.stringify(state.wallets)); el('walletInput').value = ''; refreshFull(); });
 
     initTapeLoop();
+    refreshValidatorNames();
+    refreshRevenueAndInflation();
     refreshFull();
     refreshLiveLane();
     setInterval(refreshLiveLane, 1000);
     setInterval(refreshFull, 5000);
+    setInterval(refreshRevenueAndInflation, 5000);
+    setInterval(refreshValidatorNames, 30000);
   </script>
 </body>
 </html>
