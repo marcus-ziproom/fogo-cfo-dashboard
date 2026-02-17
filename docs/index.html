@@ -389,19 +389,38 @@
 
     function drawAllocationPie({circ, nonCirc, burned, staked=0}) {
       const cvs = el('allocPie'); if (!cvs) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const cssW = Math.max(360, cvs.clientWidth || 420);
+      const cssH = 220;
+      if (cvs.width !== Math.floor(cssW * dpr) || cvs.height !== Math.floor(cssH * dpr)) {
+        cvs.width = Math.floor(cssW * dpr);
+        cvs.height = Math.floor(cssH * dpr);
+        cvs.style.width = cssW + 'px';
+        cvs.style.height = cssH + 'px';
+      }
       const ctx = cvs.getContext('2d');
-      const W = cvs.width, H = cvs.height; ctx.clearRect(0,0,W,H);
-      const cx = 118, cy = H/2 - 4, r = 74, depth = 14;
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,cssW,cssH);
+      ctx.imageSmoothingEnabled = true;
+
+      const cx = Math.min(130, cssW * 0.29), cy = cssH/2 - 2, r = 76, depth = 16;
       const parts = [
-        {k:'Circulating',v:Math.max(0,circ||0),c:'#ff8a4d'},
-        {k:'Non-Circulating',v:Math.max(0,nonCirc||0),c:'#c52812'},
-        {k:'Burned',v:Math.max(0,burned||0),c:'#5a0a00'},
-        {k:'Staked',v:Math.max(0,staked||0),c:'#ffb36d'}
+        {k:'Circulating',v:Math.max(0,circ||0),c1:'#ff9a5b',c2:'#ff5a24'},
+        {k:'Non-Circulating',v:Math.max(0,nonCirc||0),c1:'#d33117',c2:'#8f1408'},
+        {k:'Burned',v:Math.max(0,burned||0),c1:'#5d0b00',c2:'#2a0300'},
+        {k:'Staked',v:Math.max(0,staked||0),c1:'#ffd07e',c2:'#ffab57'}
       ];
       const total = parts.reduce((a,b)=>a+b.v,0) || 1;
-      const tilt = 0.76;
-      const startRot = -Math.PI/2 + Math.sin(Date.now()/1800)*0.08;
+      const tilt = 0.72;
+      const startRot = -Math.PI/2;
 
+      // shadow base
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + depth + 8, r*0.98, r*tilt*0.95, 0, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(0,0,0,.35)';
+      ctx.fill();
+
+      // depth ring
       let a0 = startRot;
       parts.forEach((p)=>{
         const da = (p.v/total)*Math.PI*2;
@@ -409,43 +428,63 @@
         ctx.ellipse(cx, cy + depth, r, r*tilt, 0, a0, a0+da);
         ctx.lineTo(cx, cy + depth);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(90,20,12,.65)';
+        ctx.fillStyle = 'rgba(70,20,12,.66)';
         ctx.fill();
         a0 += da;
       });
 
+      // top ring
       a0 = startRot;
       parts.forEach((p,i)=>{
         const da = (p.v/total)*Math.PI*2;
-        const grad = ctx.createLinearGradient(cx-r, cy-r, cx+r, cy+r);
-        grad.addColorStop(0, p.c);
-        grad.addColorStop(1, '#ffd9c0');
+        const g = ctx.createLinearGradient(cx-r, cy-r, cx+r, cy+r);
+        g.addColorStop(0,p.c1); g.addColorStop(1,p.c2);
+
         ctx.beginPath();
         ctx.ellipse(cx, cy, r, r*tilt, 0, a0, a0+da);
         ctx.lineTo(cx, cy);
         ctx.closePath();
-        ctx.fillStyle = grad;
+        ctx.fillStyle = g;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(40,10,6,.35)';
+        ctx.strokeStyle = 'rgba(35,8,6,.38)';
         ctx.lineWidth = 1;
         ctx.stroke();
+
+        // glossy highlight
+        const mid = a0 + da/2;
+        const hx = cx + Math.cos(mid) * r*0.58;
+        const hy = cy + Math.sin(mid) * r*tilt*0.58;
+        const hg = ctx.createRadialGradient(hx,hy,1,hx,hy,16);
+        hg.addColorStop(0,'rgba(255,255,255,.28)');
+        hg.addColorStop(1,'rgba(255,255,255,0)');
+        ctx.beginPath();
+        ctx.ellipse(hx, hy, 18, 10, 0, 0, Math.PI*2);
+        ctx.fillStyle = hg;
+        ctx.fill();
+
         a0 += da;
 
         const ly = 26 + i*28;
-        ctx.fillStyle = p.c; ctx.fillRect(234, ly, 12, 12);
-        ctx.fillStyle = '#ffd8c3'; ctx.font = '12px Inter';
-        ctx.fillText(`${p.k}: ${((p.v/total)*100).toFixed(1)}%`, 252, ly+11);
+        const lx = Math.max(228, cssW*0.56);
+        ctx.fillStyle = p.c1;
+        ctx.fillRect(lx, ly, 12, 12);
+        ctx.fillStyle = '#ffd8c3';
+        ctx.font = '12px Inter';
+        ctx.fillText(`${p.k}: ${((p.v/total)*100).toFixed(1)}%`, lx + 18, ly + 11);
       });
 
+      // donut core + inner glow
       ctx.beginPath();
-      ctx.ellipse(cx, cy, 30, 30*tilt, 0, 0, Math.PI*2);
-      ctx.fillStyle = 'rgba(30,10,8,.9)';
+      ctx.ellipse(cx, cy, 30, 22, 0, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(28,9,7,.94)';
       ctx.fill();
+      const ig = ctx.createRadialGradient(cx,cy,2,cx,cy,34);
+      ig.addColorStop(0,'rgba(255,146,96,.35)');
+      ig.addColorStop(1,'rgba(255,146,96,0)');
       ctx.beginPath();
-      ctx.ellipse(cx, cy, 33, 33*tilt, 0, 0, Math.PI*2);
-      ctx.strokeStyle = 'rgba(255,148,97,.45)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      ctx.ellipse(cx, cy, 35, 26, 0, 0, Math.PI*2);
+      ctx.fillStyle = ig;
+      ctx.fill();
     }
 
 
