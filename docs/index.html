@@ -13,9 +13,9 @@
       --line: #7a2a16;
       --ink: #fff0ea;
       --muted: #e7b4a3;
-      --fire1: #ff3b0a;
-      --fire2: #e12600;
-      --fire3: #9b1400;
+      --fire1: #e32300;
+      --fire2: #b51200;
+      --fire3: #6f0900;
       --amber: #ff8a4d;
       --green: #38e89c;
     }
@@ -71,21 +71,31 @@
       overflow: hidden;
       position: relative;
     }
+    .tape:before {
+      content:"";
+      position:absolute; inset:0;
+      background: linear-gradient(90deg, rgba(28,9,4,.95), transparent 8%, transparent 92%, rgba(28,9,4,.95));
+      pointer-events:none;
+      z-index:2;
+    }
     .tape-track {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 20px;
       white-space: nowrap;
       padding: 9px 0;
-      animation: tapeScroll 22s linear infinite;
+      width: max-content;
+      animation: tapeScroll 34s linear infinite;
       will-change: transform;
     }
     .tape-item {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      margin: 0 18px;
       color: #ffd9c6;
       font-size: 12px;
       letter-spacing: .03em;
+      min-width: 250px;
     }
     .tape-pill {
       border: 1px solid #9b331d;
@@ -94,8 +104,11 @@
       color: #ffba94;
       font-size: 10px;
       text-transform: uppercase;
+      flex: 0 0 auto;
     }
-    @keyframes tapeScroll { from { transform: translateX(0);} to { transform: translateX(-50%);} }
+    .trend-up { color: #65f2ae; }
+    .trend-down { color: #ff9a8a; }
+    @keyframes tapeScroll { from { transform: translate3d(0,0,0);} to { transform: translate3d(-50%,0,0);} }
 
     .kpi-grid { margin-top:16px; display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px; }
     .kpi { border:1px solid var(--line); border-radius:14px; padding:11px; background:var(--panel); position:relative; overflow:hidden; min-height: 94px; }
@@ -156,7 +169,16 @@
     </section>
 
     <section class="tape">
-      <div class="tape-track" id="tapeTrack"></div>
+      <div class="tape-track" id="tapeTrack">
+        <span class="tape-item"><span class="tape-pill">Price</span><span data-k="price">FOGO —</span></span>
+        <span class="tape-item"><span class="tape-pill">Trend</span><span data-k="trend">—</span></span>
+        <span class="tape-item"><span class="tape-pill">TPS</span><span data-k="tps">—</span></span>
+        <span class="tape-item"><span class="tape-pill">Txns24h</span><span data-k="tx24">—</span></span>
+        <span class="tape-item"><span class="tape-pill">MCap</span><span data-k="mcap">—</span></span>
+        <span class="tape-item"><span class="tape-pill">TVL</span><span data-k="tvl">—</span></span>
+        <span class="tape-item"><span class="tape-pill">Stake Ratio</span><span data-k="stakeRatio">—</span></span>
+        <span class="tape-item"><span class="tape-pill">Epoch</span><span data-k="epoch">—</span></span>
+      </div>
     </section>
 
     <section class="kpi-grid">
@@ -216,20 +238,29 @@
   </div>
 
   <script>
-    const state = { lastSyncMs: null, tpsSeries: [], wallets: JSON.parse(localStorage.getItem('fogo_wallets') || '[]'), liveTps: null, txTotal: null, lastTickTs: Date.now(), activity: [] };
+    const state = {
+      lastSyncMs: null,
+      tpsSeries: [],
+      wallets: JSON.parse(localStorage.getItem('fogo_wallets') || '[]'),
+      liveTps: null,
+      txTotal: null,
+      lastTickTs: Date.now(),
+      market: { price: null, pricePrev: null, mcap: null, fdv: null, vol: null, chg24: null },
+      network: { tvl: null, epoch: null, epochProgress: null, stakeRatio: null }
+    };
     const el = (id) => document.getElementById(id);
     const fmtUsd = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', notation: n > 1e9 ? 'compact' : 'standard', maximumFractionDigits: 2 }).format(n);
+    const fmtUsdPrice = (n) => (n == null || !isFinite(n)) ? '—' : `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
     const fmtNum = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
     const fmtCompact = (n) => (n == null || !isFinite(n)) ? '—' : new Intl.NumberFormat('en-US', { notation:'compact', maximumFractionDigits: 2 }).format(n);
 
-    function pushActivity(tag, text) {
-      const t = new Date().toLocaleTimeString();
-      state.activity.unshift({ tag, text, t });
-      state.activity = state.activity.slice(0, 14);
-      const list = state.activity.length ? state.activity : [{ tag: 'LIVE', text: 'Initializing telemetry stream', t }];
-      const html = list.map(i => `<span class="tape-item"><span class="tape-pill">${i.tag}</span>${i.text}<small style="opacity:.72">${i.t}</small></span>`).join('');
+    function setTapeValue(key, html) {
+      document.querySelectorAll(`[data-k="${key}"]`).forEach(n => n.innerHTML = html);
+    }
+
+    function initTapeLoop() {
       const track = el('tapeTrack');
-      track.innerHTML = html + html;
+      track.innerHTML += track.innerHTML;
     }
 
     async function rpc(method, params=[]) {
@@ -277,14 +308,26 @@
         const [market, tvl, epoch, vote, supply] = await Promise.all([fetchMarket(), fetchTvl(), rpc('getEpochInfo', []), rpc('getVoteAccounts', []), rpc('getSupply', [{commitment:'confirmed'}])]);
         const circ = market?.circulating_supply ?? null; const totalSupply = market?.total_supply ?? supply?.value?.total / 1e9 ?? null; const activeVotes = vote?.current || [];
         const totalStakeLamports = activeVotes.reduce((a,v)=> a + Number(v.activatedStake || 0), 0); const totalStake = totalStakeLamports / 1e9;
-        el('price').textContent = fmtUsd(market?.current_price); el('chg').textContent = market?.price_change_percentage_24h != null ? `${market.price_change_percentage_24h.toFixed(2)}% (24h)` : '—';
-        if (market?.current_price) pushActivity('MARKET', `FOGO ${fmtUsd(market.current_price)} • 24h ${market?.price_change_percentage_24h?.toFixed?.(2) ?? '0.00'}%`);
-        el('mcap').textContent = fmtUsd(market?.market_cap); el('fdv').textContent = fmtUsd(market?.fully_diluted_valuation); el('vol').textContent = fmtUsd(market?.total_volume);
+
+        state.market.pricePrev = state.market.price;
+        state.market.price = market?.current_price ?? state.market.price;
+        state.market.chg24 = market?.price_change_percentage_24h ?? state.market.chg24;
+        state.market.mcap = market?.market_cap ?? state.market.mcap;
+        state.market.fdv = market?.fully_diluted_valuation ?? state.market.fdv;
+        state.market.vol = market?.total_volume ?? state.market.vol;
+
+        el('price').textContent = fmtUsdPrice(state.market.price);
+        const pArrow = state.market.pricePrev != null && state.market.price != null ? (state.market.price >= state.market.pricePrev ? '▲' : '▼') : '•';
+        el('chg').innerHTML = state.market.chg24 != null ? `<span class="${state.market.chg24 >= 0 ? 'trend-up' : 'trend-down'}">${pArrow} ${state.market.chg24.toFixed(2)}% (24h)</span>` : '—';
+        el('mcap').textContent = fmtUsd(state.market.mcap); el('fdv').textContent = fmtUsd(state.market.fdv); el('vol').textContent = fmtUsd(state.market.vol);
         el('circ').textContent = fmtCompact(circ); el('supplyRatio').textContent = (circ && totalSupply) ? `${((circ/totalSupply)*100).toFixed(2)}% of total supply` : '—'; el('tvl').textContent = fmtUsd(tvl);
+
         if (epoch?.transactionCount) state.txTotal = Number(epoch.transactionCount);
-        el('txTotal').textContent = fmtCompact(state.txTotal); el('epoch').textContent = epoch?.epoch ?? '—'; el('epochProgress').textContent = epoch?.slotsInEpoch ? `${((epoch.slotIndex/epoch.slotsInEpoch)*100).toFixed(2)}% through epoch` : '—';
+        const epochProgress = epoch?.slotsInEpoch ? ((epoch.slotIndex/epoch.slotsInEpoch)*100) : null;
+        state.network.tvl = tvl; state.network.epoch = epoch?.epoch ?? null; state.network.epochProgress = epochProgress; state.network.stakeRatio = totalSupply ? ((totalStake/totalSupply)*100) : null;
+
+        el('txTotal').textContent = fmtCompact(state.txTotal); el('epoch').textContent = epoch?.epoch ?? '—'; el('epochProgress').textContent = epochProgress != null ? `${epochProgress.toFixed(2)}% through epoch` : '—';
         el('stake').textContent = fmtCompact(totalStake); el('stakingRatio').textContent = totalSupply ? `${((totalStake/totalSupply)*100).toFixed(2)}% staking ratio` : '—'; el('validators').textContent = activeVotes.length || '—';
-        pushActivity('NETWORK', `Validators ${activeVotes.length || 0} • Stake ${fmtCompact(totalStake)} FOGO`);
         setBars(circ, totalSupply, totalStake);
         const top = [...activeVotes].sort((a,b)=>Number(b.activatedStake||0)-Number(a.activatedStake||0)).slice(0,10);
         el('validatorRows').innerHTML = top.map(v=>{ const stake = Number(v.activatedStake||0)/1e9; const share = totalStake ? (stake/totalStake)*100 : 0; const name=(v.nodePubkey||'').slice(0,6)+'…'+(v.nodePubkey||'').slice(-6); return `<tr><td>${name}</td><td>${fmtCompact(stake)}</td><td>${share.toFixed(2)}%</td></tr>`; }).join('') || '<tr><td colspan="3">No validator data</td></tr>';
@@ -293,31 +336,63 @@
       } catch { el('syncAge').textContent = 'Data fetch error. Retrying automatically…'; }
     }
 
+    function updateTickerAndTrends(now) {
+      const dt = Math.max(1, (now - state.lastTickTs)/1000);
+      state.lastTickTs = now;
+
+      let tpsDisplay = null;
+      if (state.liveTps) {
+        tpsDisplay = state.liveTps * (1 + (Math.sin(now / 350) * 0.005));
+        el('tps').textContent = fmtNum(tpsDisplay);
+        el('tx24').textContent = fmtCompact(tpsDisplay * 86400);
+        if (state.txTotal) { state.txTotal += tpsDisplay * dt; el('txTotal').textContent = fmtCompact(state.txTotal); }
+      }
+
+      if (state.market.price != null) {
+        const drift = (state.market.chg24 || 0) / 100 / 86400;
+        const micro = Math.sin(now / 700) * 0.0006;
+        const prev = state.market.price;
+        state.market.price = prev * (1 + drift + micro);
+        const up = state.market.price >= prev;
+        el('price').innerHTML = `${fmtUsdPrice(state.market.price)} <span class="${up ? 'trend-up' : 'trend-down'}">${up ? '▲' : '▼'}</span>`;
+        const ratio = prev > 0 && state.market.mcap ? (state.market.price / prev) : 1;
+        if (state.market.mcap) el('mcap').textContent = fmtUsd(state.market.mcap * ratio);
+        if (state.market.fdv) el('fdv').textContent = fmtUsd(state.market.fdv * ratio);
+        if (state.market.vol) el('vol').textContent = fmtUsd(state.market.vol * (1 + Math.sin(now / 1200) * 0.002));
+      }
+
+      const trend24 = state.market.chg24 != null ? `${state.market.chg24 >= 0 ? '▲' : '▼'} ${Math.abs(state.market.chg24).toFixed(2)}%` : '—';
+      setTapeValue('price', `FOGO ${fmtUsdPrice(state.market.price)}`);
+      setTapeValue('trend', `<span class="${(state.market.chg24 || 0) >= 0 ? 'trend-up' : 'trend-down'}">${trend24}</span>`);
+      setTapeValue('tps', tpsDisplay != null ? `${tpsDisplay.toFixed(2)} TPS` : '—');
+      setTapeValue('tx24', tpsDisplay != null ? `${fmtCompact(tpsDisplay * 86400)}` : '—');
+      setTapeValue('mcap', fmtUsd(state.market.mcap));
+      setTapeValue('tvl', fmtUsd(state.network.tvl));
+      setTapeValue('stakeRatio', state.network.stakeRatio != null ? `${state.network.stakeRatio.toFixed(2)}%` : '—');
+      setTapeValue('epoch', state.network.epoch != null ? `#${state.network.epoch} • ${state.network.epochProgress?.toFixed?.(2) ?? '—'}%` : '—');
+    }
+
     async function refreshLiveLane() {
       try {
         const perf = await rpc('getRecentPerformanceSamples', [10]);
-        const samples = Array.isArray(perf) ? perf : []; const totalTx = samples.reduce((a,s)=>a + Number(s?.numTransactions || 0),0); const totalSecs = samples.reduce((a,s)=>a + Number(s?.samplePeriodSecs || 0),0);
+        const samples = Array.isArray(perf) ? perf : [];
+        const totalTx = samples.reduce((a,s)=>a + Number(s?.numTransactions || 0),0);
+        const totalSecs = samples.reduce((a,s)=>a + Number(s?.samplePeriodSecs || 0),0);
         const tps = totalTx && totalSecs ? totalTx / totalSecs : null;
         if (tps && isFinite(tps)) { state.liveTps = tps; state.tpsSeries.push(tps); if (state.tpsSeries.length > 160) state.tpsSeries.shift(); }
       } catch {}
-      const now = Date.now(); const dt = Math.max(1, (now - state.lastTickTs)/1000); state.lastTickTs = now;
-      if (state.liveTps) {
-        const tpsJitter = state.liveTps * (1 + (Math.sin(now / 350) * 0.004));
-        el('tps').textContent = fmtNum(tpsJitter);
-        el('tx24').textContent = fmtCompact(tpsJitter * 86400);
-        if (state.txTotal) { state.txTotal += tpsJitter * dt; el('txTotal').textContent = fmtCompact(state.txTotal); }
-        if (now % 5000 < 1000) pushActivity('THROUGHPUT', `Live TPS ${tpsJitter.toFixed(2)} • Txns24 ${fmtCompact(tpsJitter * 86400)}`);
-      }
-      updateSync(); drawSpark();
+      updateTickerAndTrends(Date.now());
+      updateSync();
+      drawSpark();
     }
 
     el('addWallet').addEventListener('click', () => { const w = el('walletInput').value.trim(); if (!w) return; if (!state.wallets.includes(w)) state.wallets.push(w); localStorage.setItem('fogo_wallets', JSON.stringify(state.wallets)); el('walletInput').value = ''; refreshFull(); });
 
-    pushActivity('LIVE', 'Fogo treasury telemetry stream online');
+    initTapeLoop();
     refreshFull();
     refreshLiveLane();
     setInterval(refreshLiveLane, 1000);
-    setInterval(refreshFull, 15000);
+    setInterval(refreshFull, 5000);
   </script>
 </body>
 </html>
