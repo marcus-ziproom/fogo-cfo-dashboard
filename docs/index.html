@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Fogo Token Treasury Dashboard</title>
+  <title>Fogo Ecosystem Tokenomics</title>
   <meta name="description" content="CFO-level live token treasury dashboard for Fogo Foundation" />
   <style>
     :root {
@@ -158,7 +158,7 @@
           <img class="fogo-logo" src="./fogo-logo.png" alt="Fogo logo" />
           <span class="badge"><span class="dot"></span> Fogo Foundation • Connection Live</span>
         </div>
-        <h1>Fogo Token Treasury Dashboard</h1>
+        <h1>Fogo Ecosystem Tokenomics</h1>
         <p class="sub">Live tokenomics, chain throughput, supply diagnostics, validator concentration and treasury wallet monitoring.</p>
       </div>
       <div class="sync">
@@ -186,6 +186,7 @@
       <div class="kpi"><div class="k-label">Market Cap</div><div class="k-value" id="mcap">—</div><div class="k-sub">USD</div></div>
       <div class="kpi"><div class="k-label">FDV</div><div class="k-value" id="fdv">—</div><div class="k-sub">USD</div></div>
       <div class="kpi"><div class="k-label">24h Volume</div><div class="k-value" id="vol">—</div><div class="k-sub">USD</div></div>
+      <div class="kpi"><div class="k-label">Onchain Revenue (Sample)</div><div class="k-value" id="revenue">—</div><div class="k-sub" id="revenueMeta">Fee-based proxy from live tx sample</div></div>
       <div class="kpi"><div class="k-label">Circulating Supply</div><div class="k-value" id="circ">—</div><div class="k-sub" id="supplyRatio">—</div></div>
       <div class="kpi"><div class="k-label">TVL</div><div class="k-value" id="tvl">—</div><div class="k-sub">DeFiLlama</div></div>
 
@@ -211,6 +212,11 @@
           <div class="bar-row"><div>Circulating</div><div class="bar-track"><div id="barCirc" class="bar-fill" style="width:0%"></div></div><div id="txtCirc">—</div></div>
           <div class="bar-row"><div>Non-Circulating</div><div class="bar-track"><div id="barNonCirc" class="bar-fill" style="width:0%"></div></div><div id="txtNonCirc">—</div></div>
           <div class="bar-row"><div>Staked</div><div class="bar-track"><div id="barStaked" class="bar-fill" style="width:0%"></div></div><div id="txtStaked">—</div></div>
+          <div class="bar-row"><div>Burned</div><div class="bar-track"><div id="barBurned" class="bar-fill" style="width:0%"></div></div><div id="txtBurned">—</div></div>
+        </div>
+        <div style="margin-top:12px">
+          <div style="font-size:12px;color:#ffc4a0;margin-bottom:6px">Ecosystem Allocation</div>
+          <canvas id="allocPie" width="420" height="220" style="width:100%;height:220px;border:1px solid #7f4428;border-radius:12px;background:rgba(33,16,10,.62)"></canvas>
         </div>
       </div>
     </section>
@@ -292,11 +298,46 @@
       el('sparkMin').textContent = `Min: ${min.toFixed(2)} TPS`; el('sparkNow').textContent = `Now: ${last.toFixed(2)} TPS`; el('sparkMax').textContent = `Max: ${max.toFixed(2)} TPS`;
     }
 
-    function setBars(circ, total, staked) {
+    function setBars(circ, total, staked, burned) {
       if (!total || !isFinite(total)) return;
-      const pCirc = Math.max(0, Math.min(100, ((circ||0)/total)*100)); const pNon = Math.max(0, 100 - pCirc); const pSt = Math.max(0, Math.min(100, ((staked||0)/total)*100));
-      el('barCirc').style.width = pCirc + '%'; el('barNonCirc').style.width = pNon + '%'; el('barStaked').style.width = pSt + '%';
-      el('txtCirc').textContent = pCirc.toFixed(2)+'%'; el('txtNonCirc').textContent = pNon.toFixed(2)+'%'; el('txtStaked').textContent = pSt.toFixed(2)+'%';
+      const pCirc = Math.max(0, Math.min(100, ((circ||0)/total)*100));
+      const pSt = Math.max(0, Math.min(100, ((staked||0)/total)*100));
+      const pBurn = Math.max(0, Math.min(100, ((burned||0)/total)*100));
+      const pNon = Math.max(0, 100 - pCirc - pBurn);
+      el('barCirc').style.width = pCirc + '%';
+      el('barNonCirc').style.width = pNon + '%';
+      el('barStaked').style.width = pSt + '%';
+      el('barBurned').style.width = pBurn + '%';
+      el('txtCirc').textContent = pCirc.toFixed(2)+'%';
+      el('txtNonCirc').textContent = pNon.toFixed(2)+'%';
+      el('txtStaked').textContent = pSt.toFixed(2)+'%';
+      el('txtBurned').textContent = pBurn.toFixed(2)+'%';
+    }
+
+    function drawAllocationPie({circ, nonCirc, burned, treasury=12, community=18, ecosystem=20}) {
+      const cvs = el('allocPie'); if (!cvs) return;
+      const ctx = cvs.getContext('2d');
+      const W = cvs.width, H = cvs.height; ctx.clearRect(0,0,W,H);
+      const cx = 110, cy = H/2, r = 78;
+      const parts = [
+        {k:'Circulating',v:Math.max(0,circ||0),c:'#ff8a4d'},
+        {k:'Non-Circ',v:Math.max(0,nonCirc||0),c:'#b51200'},
+        {k:'Burned',v:Math.max(0,burned||0),c:'#6f0900'},
+        {k:'Treasury',v:treasury,c:'#ff4a2d'},
+        {k:'Community',v:community,c:'#ffbe67'},
+        {k:'Ecosystem',v:ecosystem,c:'#ffa26e'}
+      ];
+      const total = parts.reduce((a,b)=>a+b.v,0) || 1;
+      let a0 = -Math.PI/2;
+      parts.forEach((p,i)=>{
+        const da = (p.v/total)*Math.PI*2;
+        ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r,a0,a0+da); ctx.closePath(); ctx.fillStyle=p.c; ctx.fill();
+        a0 += da;
+        const ly = 26 + i*28;
+        ctx.fillStyle = p.c; ctx.fillRect(230, ly, 12, 12);
+        ctx.fillStyle = '#ffd8c3'; ctx.font = '12px Inter';
+        ctx.fillText(`${p.k}: ${((p.v/total)*100).toFixed(1)}%`, 248, ly+11);
+      });
     }
 
     async function refreshWallets(price) {
@@ -308,8 +349,13 @@
     async function refreshFull() {
       try {
         const [market, tvl, epoch, vote, supply] = await Promise.all([fetchMarket(), fetchTvl(), rpc('getEpochInfo', []), rpc('getVoteAccounts', []), rpc('getSupply', [{commitment:'confirmed'}])]);
-        const circ = market?.circulating_supply ?? null; const totalSupply = market?.total_supply ?? supply?.value?.total / 1e9 ?? null; const activeVotes = vote?.current || [];
-        const totalStakeLamports = activeVotes.reduce((a,v)=> a + Number(v.activatedStake || 0), 0); const totalStake = totalStakeLamports / 1e9;
+        const circ = market?.circulating_supply ?? null;
+        const totalSupply = market?.total_supply ?? supply?.value?.total / 1e9 ?? null;
+        const maxSupply = market?.max_supply ?? null;
+        const burned = (maxSupply && totalSupply) ? Math.max(0, maxSupply - totalSupply) : 0;
+        const activeVotes = vote?.current || [];
+        const totalStakeLamports = activeVotes.reduce((a,v)=> a + Number(v.activatedStake || 0), 0);
+        const totalStake = totalStakeLamports / 1e9;
 
         state.market.pricePrev = state.market.price;
         state.market.price = market?.current_price ?? state.market.price;
@@ -334,7 +380,9 @@
         el('stake').textContent = fmtCompact(totalStake);
         el('stakingRatio').textContent = totalSupply ? `${((totalStake/totalSupply)*100).toFixed(2)}% staking ratio` : '—';
         el('validators').textContent = activeVotes.length || '—';
-        setBars(circ, totalSupply, totalStake);
+        const nonCircAbs = Math.max(0, (totalSupply || 0) - (circ || 0));
+        setBars(circ, totalSupply, totalStake, burned);
+        drawAllocationPie({ circ: circ || 0, nonCirc: nonCircAbs, burned: burned || 0 });
         const top = [...activeVotes].sort((a,b)=>Number(b.activatedStake||0)-Number(a.activatedStake||0)).slice(0,10);
         el('validatorRows').innerHTML = top.map(v=>{ const stake = Number(v.activatedStake||0)/1e9; const share = totalStake ? (stake/totalStake)*100 : 0; const name=(v.nodePubkey||'').slice(0,6)+'…'+(v.nodePubkey||'').slice(-6); return `<tr><td>${name}</td><td>${fmtCompact(stake)}</td><td>${share.toFixed(2)}%</td></tr>`; }).join('') || '<tr><td colspan="3">No validator data</td></tr>';
         await refreshWallets(market?.current_price || null);
@@ -355,6 +403,12 @@
       el('tx24').textContent = state.txWindowCount != null ? fmtCompact(state.txWindowCount) : '—';
       el('txWindowMeta').textContent = state.txWindowSecs ? `Exact sum over last ${(state.txWindowSecs/60).toFixed(0)} min sample window` : 'Exact sum from live performance samples';
       el('txTotal').textContent = fmtCompact(state.txTotal);
+
+      const feePerTxFogo = 0.000005; // 5000 lamports / 1e9
+      const sampleRevenueFogo = state.txWindowCount != null ? state.txWindowCount * feePerTxFogo : null;
+      const sampleRevenueUsd = (sampleRevenueFogo != null && state.market.price != null) ? sampleRevenueFogo * state.market.price : null;
+      el('revenue').textContent = sampleRevenueUsd != null ? fmtUsd(sampleRevenueUsd) : '—';
+      el('revenueMeta').textContent = state.txWindowSecs ? `Proxy from base tx fees over ${(state.txWindowSecs/60).toFixed(0)}m` : 'Fee-based proxy from live tx sample';
 
       setTapeValue('price', `FOGO ${fmtUsdPrice(state.market.price)}`);
       setTapeValue('trend', `<span class="${up ? 'trend-up' : 'trend-down'}">${trend24}</span>`);
