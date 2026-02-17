@@ -497,9 +497,12 @@
 
     async function refreshFull() {
       try {
+        if (!Object.keys(state.validatorNameMap).length) await fetchValidatorNameMap();
         const [market, tvl, epoch, vote, supply] = await Promise.all([fetchMarket(), fetchTvl(), rpc('getEpochInfo', []), rpc('getVoteAccounts', []), rpc('getSupply', [{commitment:'confirmed'}])]);
+        await fetchRevenueAndInflation();
         const circ = market?.circulating_supply ?? null;
         const totalSupply = market?.total_supply ?? supply?.value?.total / 1e9 ?? null;
+        state.totalSupplyCurrent = totalSupply;
         if (totalSupply && !state.supplyBaseline) state.supplyBaseline = totalSupply;
         const maxSupply = market?.max_supply ?? null;
         const burned = (maxSupply && totalSupply) ? Math.max(0, maxSupply - totalSupply) : 0;
@@ -535,7 +538,7 @@
         el('validators').textContent = activeVotes.length || '—';
         const nonCircAbs = Math.max(0, (totalSupply || 0) - (circ || 0));
         setBars(circ, totalSupply, totalStake, burned);
-        drawAllocationPie({ circ: circ || 0, nonCirc: nonCircAbs, burned: burned || 0 });
+        drawAllocationPie({ circ: circ || 0, nonCirc: nonCircAbs, burned: burned || 0, staked: totalStake || 0 });
         const top = [...activeVotes].sort((a,b)=>Number(b.activatedStake||0)-Number(a.activatedStake||0)).slice(0,10);
         el('validatorRows').innerHTML = top.map(v=>{
           const stake = Number(v.activatedStake||0)/1e9;
@@ -562,18 +565,19 @@
       el('txWindowMeta').textContent = state.txWindowSecs ? `Exact sum over last ${(state.txWindowSecs/60).toFixed(0)} min sample window` : 'Exact sum from live performance samples';
       el('txTotal').textContent = fmtCompact(state.txTotal);
 
+      const rev1hFogo = state.observedFees.reduce((a,b)=>a+b.fogo,0);
+      const rev1hUsd = state.market.price != null ? rev1hFogo * state.market.price : null;
       el('revValue').textContent = state.revenueUsd != null ? fmtUsd(state.revenueUsd) : '—';
-      el('revMeta').textContent = state.revenueSlots ? `Exact fee sum over last ${state.revenueSlots} blocks` : '—';
+      el('revMeta').textContent = `Exact fee sum from latest finalized block • 1h observed: ${rev1hUsd != null ? fmtUsd(rev1hUsd) : '—'}`;
 
       const inflPct = state.inflationRate != null ? (state.inflationRate * 100) : null;
-      const annualTokens = (state.inflationRate != null && state.supplyBaseline != null) ? state.supplyBaseline * state.inflationRate : null;
-      const annualUsd = (annualTokens != null && state.market.price != null) ? annualTokens * state.market.price : null;
+      const annualTokens = state.inflationFogoYear;
+      const annualUsd = state.inflationUsdYear;
       el('inflValue').textContent = inflPct != null ? `${inflPct.toFixed(2)}%` : '—';
       el('inflMeta').textContent = annualUsd != null ? `≈ ${fmtUsd(annualUsd)} annualized` : 'Annualized from onchain inflation rate';
 
-      const inflSince = (state.supplyBaseline != null && state.market.totalSupply != null)
-        ? Math.max(0, state.market.totalSupply - state.supplyBaseline)
-        : null;
+      const elapsedYears = (Date.now() - state.openTs) / (365*24*3600*1000);
+      const inflSince = annualTokens != null ? Math.max(0, annualTokens * elapsedYears) : null;
       const inflSinceUsd = (inflSince != null && state.market.price != null) ? inflSince * state.market.price : null;
       el('inflSinceOpen').textContent = inflSince != null ? `${fmtCompact(inflSince)} FOGO` : 'Tracking...';
       el('inflUsdSinceOpen').textContent = inflSinceUsd != null ? `${fmtUsd(inflSinceUsd)} since open` : 'USD equivalent updates live';
@@ -610,6 +614,7 @@
         }
 
         if (epoch?.transactionCount) state.txTotal = Number(epoch.transactionCount);
+        await fetchRevenueAndInflation();
       } catch {}
 
       renderFromState();
